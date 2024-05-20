@@ -1,6 +1,6 @@
 {
   "name": "imageresize",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -10,6 +10,6 @@
   "license": "ISC",
   "dependencies": {
     "aws-sdk": "^2.1610.0",
-    "sharp": "^0.33.3"
+    "sharp": "^0.33.4"
   }
 }

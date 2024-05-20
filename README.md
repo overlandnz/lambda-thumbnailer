@@ -12,3 +12,5 @@ You need to configure the S3 trigger yourself and add the following environment 
 | DSTPATH | The path in the new bucket to place the files | `thumbnails` |
 | SIZES | A comma seperated list of widths | `400,800,1200` |
 | CLEANUPSOURCE | Should the source image be deleted? | `true/false` |
+| ACL | Any custom ACL to apply | `public-read` |
+| COPYORIGINAL | Copy the original to the destination bucket | `true/false` |

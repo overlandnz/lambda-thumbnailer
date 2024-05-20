@@ -21,6 +21,20 @@ exports.handler = async (event, context, callback) => {
         destinationKey = `${destinationPath}/${srcKey}`;
     }
 
+    if (process.env.COPYORIGINAL === 'true') {
+        let copyObject = {
+            Bucket: destinationBucket,
+            CopySource: `${srcBucket}/${srcKey}`,
+            Key: destinationKey
+        };
+
+        if (process.env.ACL) {
+            copyObject.ACL = process.env.ACL;
+        }
+
+        await s3.copyObject(copyObject).promise();
+    }
+
     const sizes = process.env.SIZES.split(',').map(size => parseInt(size));
     for (let i = 0; i < sizes.length; i++) {
         await resizeImage(sizes[i], srcBucket, srcKey, destinationBucket, destinationKey);
@@ -37,11 +51,17 @@ exports.handler = async (event, context, callback) => {
 const resizeImage = async (size, srcBucket, srcKey, dstBucket, dstKey) => {
     const image = await s3.getObject({ Bucket: srcBucket, Key: srcKey }).promise();
     const resizedImage = await sharp(image.Body).resize(size).toBuffer();
-    
-    await s3.putObject({
+
+    let uploadModel = {
         Bucket: dstBucket,
         Key: `${dstKey}_${size}`,
         Body: resizedImage,
         ContentType: image.ContentType
-    }).promise();
+    };
+
+    if (process.env.ACL) {
+        uploadModel.ACL = process.env.ACL;
+    }
+
+    await s3.putObject(uploadModel).promise();
 }
