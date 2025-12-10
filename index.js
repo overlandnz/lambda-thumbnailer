@@ -1,7 +1,7 @@
-const AWS = require('aws-sdk');
+const { S3Client, CopyObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const sharp = require('sharp');
 
-const s3 = new AWS.S3();
+const s3Client = new S3Client({});
 
 exports.handler = async (event, context, callback) => {
     const srcBucket = event.Records[0].s3.bucket.name;
@@ -22,17 +22,17 @@ exports.handler = async (event, context, callback) => {
     }
 
     if (process.env.COPYORIGINAL === 'true') {
-        let copyObject = {
+        let copyObjectParams = {
             Bucket: destinationBucket,
             CopySource: `${srcBucket}/${srcKey}`,
             Key: destinationKey
         };
 
         if (process.env.ACL) {
-            copyObject.ACL = process.env.ACL;
+            copyObjectParams.ACL = process.env.ACL;
         }
 
-        await s3.copyObject(copyObject).promise();
+        await s3Client.send(new CopyObjectCommand(copyObjectParams));
     }
 
     const sizes = process.env.SIZES.split(',').map(size => parseInt(size));
@@ -42,26 +42,34 @@ exports.handler = async (event, context, callback) => {
 
     const cleanUpSource = process.env.CLEANUPSOURCE === 'true';
     if (cleanUpSource) {
-        await s3.deleteObject({ Bucket: srcBucket, Key: srcKey }).promise();
+        await s3Client.send(new DeleteObjectCommand({ Bucket: srcBucket, Key: srcKey }));
     }
 
     callback(null, `Successfully resized ${srcBucket}/${srcKey}`);
 }
 
 const resizeImage = async (size, srcBucket, srcKey, dstBucket, dstKey) => {
-    const image = await s3.getObject({ Bucket: srcBucket, Key: srcKey }).promise();
-    const resizedImage = await sharp(image.Body).resize(size).toBuffer();
+    const getObjectResponse = await s3Client.send(new GetObjectCommand({ Bucket: srcBucket, Key: srcKey }));
+    
+    // Convert stream to buffer for sharp
+    const chunks = [];
+    for await (const chunk of getObjectResponse.Body) {
+        chunks.push(chunk);
+    }
+    const imageBuffer = Buffer.concat(chunks);
+    
+    const resizedImage = await sharp(imageBuffer).resize(size).toBuffer();
 
-    let uploadModel = {
+    let uploadParams = {
         Bucket: dstBucket,
         Key: `${dstKey}_${size}`,
         Body: resizedImage,
-        ContentType: image.ContentType
+        ContentType: getObjectResponse.ContentType
     };
 
     if (process.env.ACL) {
-        uploadModel.ACL = process.env.ACL;
+        uploadParams.ACL = process.env.ACL;
     }
 
-    await s3.putObject(uploadModel).promise();
+    await s3Client.send(new PutObjectCommand(uploadParams));
 }
