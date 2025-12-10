@@ -58,7 +58,7 @@ const resizeImage = async (size, srcBucket, srcKey, dstBucket, dstKey) => {
     }
     const imageBuffer = Buffer.concat(chunks);
     
-    const resizedImage = await sharp(imageBuffer).resize(size).toBuffer();
+    const resizedImage = await sharp(imageBuffer).autoOrient().resize(size).toBuffer();
 
     let uploadParams = {
         Bucket: dstBucket,
