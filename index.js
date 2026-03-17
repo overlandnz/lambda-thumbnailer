@@ -3,7 +3,7 @@ const sharp = require('sharp');
 
 const s3Client = new S3Client({});
 
-exports.handler = async (event, context, callback) => {
+exports.handler = async (event, context) => {
     const srcBucket = event.Records[0].s3.bucket.name;
     const srcKey = event.Records[0].s3.object.key;
 
@@ -45,8 +45,8 @@ exports.handler = async (event, context, callback) => {
         await s3Client.send(new DeleteObjectCommand({ Bucket: srcBucket, Key: srcKey }));
     }
 
-    callback(null, `Successfully resized ${srcBucket}/${srcKey}`);
-}
+    return `Successfully resized ${srcBucket}/${srcKey}`;
+};
 
 const resizeImage = async (size, srcBucket, srcKey, dstBucket, dstKey) => {
     const getObjectResponse = await s3Client.send(new GetObjectCommand({ Bucket: srcBucket, Key: srcKey }));
