@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build
@@ -34,9 +37,33 @@ jobs:
             cp package-lock.json output/
             cp README.md output/
             cp LICENSE output/
+            (cd output && zip -qr ../lambda.zip .)
 
         - name: Upload Lambda
           uses: actions/upload-artifact@v4
           with:
               name: lambda
               path: output/
+
+        # The release tag comes from package.json. Bump the version there to cut a new
+        # release; pushes that leave it unchanged still build and test but skip this.
+        - name: Read version
+          id: version
+          run: |
+            tag="v$(node -p "require('./package.json').version")"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "Tag $tag already exists; skipping release"
+            else
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+            fi
+
+        - name: Create release
+          if: steps.version.outputs.exists == 'false'
+          uses: softprops/action-gh-release@v2
+          with:
+            tag_name: ${{ steps.version.outputs.tag }}
+            name: ${{ steps.version.outputs.tag }}
+            generate_release_notes: true
+            files: lambda.zip

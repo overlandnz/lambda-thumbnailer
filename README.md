@@ -26,3 +26,7 @@ npm test
 ```
 
 Runs the `node:test` suite under `test/`. It generates images tagged with each of the 8 EXIF orientations in JPEG, PNG, WebP and TIFF and checks the thumbnails come out upright, plus the S3 key handling, copy/cleanup behaviour and configuration parsing. No AWS credentials are needed; S3 is replaced with an in-memory fake.
+
+### Releases
+
+Every push to `main` builds and tests the Lambda. If `package.json` carries a version that has not been tagged yet, the workflow also creates a GitHub release `v<version>` with `lambda.zip` attached, ready to upload to the function. Bump the version to cut a new release.
