@@ -1,75 +1,97 @@
 const { S3Client, CopyObjectCommand, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const sharp = require('sharp');
 
+// Lambda reuses the container between invocations. libvips' operation cache would
+// otherwise keep decoded images from earlier invocations alive in memory.
+sharp.cache(false);
+
 const s3Client = new S3Client({});
 
-exports.handler = async (event, context) => {
-    const srcBucket = event.Records[0].s3.bucket.name;
-    const srcKey = event.Records[0].s3.object.key;
-
-    let destinationBucket = process.env.DSTBUCKET;
-    if (!destinationBucket) {
+const readConfig = (env) => {
+    if (!env.DSTBUCKET) {
         throw new Error('Destination bucket is not set');
     }
 
-    let destinationPath = process.env.DSTPATH;
-    let destinationKey = ''
+    const sizes = (env.SIZES || '')
+        .split(',')
+        .map(size => parseInt(size.trim(), 10))
+        .filter(size => Number.isInteger(size) && size > 0);
 
-    if (!destinationPath) {
-        destinationKey = srcKey;
-    } else {
-        destinationKey = `${destinationPath}/${srcKey}`;
+    if (sizes.length === 0) {
+        throw new Error('SIZES must contain at least one width');
     }
 
-    if (process.env.COPYORIGINAL === 'true') {
-        let copyObjectParams = {
-            Bucket: destinationBucket,
-            CopySource: `${srcBucket}/${srcKey}`,
-            Key: destinationKey
-        };
+    return {
+        destinationBucket: env.DSTBUCKET,
+        destinationPath: env.DSTPATH || '',
+        sizes,
+        copyOriginal: env.COPYORIGINAL === 'true',
+        cleanUpSource: env.CLEANUPSOURCE === 'true',
+        acl: env.ACL || undefined
+    };
+};
 
-        if (process.env.ACL) {
-            copyObjectParams.ACL = process.env.ACL;
-        }
+// S3 event notifications URL-encode the object key (and use "+" for spaces).
+const decodeKey = (key) => decodeURIComponent(key.replace(/\+/g, ' '));
 
-        await s3Client.send(new CopyObjectCommand(copyObjectParams));
-    }
+// CopySource must be URL-encoded, but "/" separators must stay as-is.
+const encodeCopySource = (bucket, key) => `${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
 
-    const sizes = process.env.SIZES.split(',').map(size => parseInt(size));
-    for (let i = 0; i < sizes.length; i++) {
-        await resizeImage(sizes[i], srcBucket, srcKey, destinationBucket, destinationKey);
-    }
+const processRecord = async (record, { s3Client, config }) => {
+    const srcBucket = record.s3.bucket.name;
+    const srcKey = decodeKey(record.s3.object.key);
+    const destinationKey = config.destinationPath ? `${config.destinationPath}/${srcKey}` : srcKey;
 
-    const cleanUpSource = process.env.CLEANUPSOURCE === 'true';
-    if (cleanUpSource) {
+    const copyOriginal = config.copyOriginal
+        ? s3Client.send(new CopyObjectCommand({
+            Bucket: config.destinationBucket,
+            CopySource: encodeCopySource(srcBucket, srcKey),
+            Key: destinationKey,
+            ACL: config.acl
+        }))
+        : Promise.resolve();
+
+    // Download the source once, regardless of how many sizes are requested.
+    const source = await s3Client.send(new GetObjectCommand({ Bucket: srcBucket, Key: srcKey }));
+    const imageBuffer = Buffer.from(await source.Body.transformToByteArray());
+
+    // autoOrient() applies the EXIF Orientation tag to the pixels and drops the tag,
+    // so every thumbnail is stored upright. It must come before resize().
+    const image = sharp(imageBuffer).autoOrient();
+
+    // Never upscale: a source narrower than the requested width is stored at its own width.
+    const uploads = config.sizes.map(async (size) => {
+        const resized = await image.clone().resize({ width: size, withoutEnlargement: true }).toBuffer();
+        await s3Client.send(new PutObjectCommand({
+            Bucket: config.destinationBucket,
+            Key: `${destinationKey}_${size}`,
+            Body: resized,
+            ContentType: source.ContentType,
+            ACL: config.acl
+        }));
+    });
+
+    await Promise.all([copyOriginal, ...uploads]);
+
+    if (config.cleanUpSource) {
         await s3Client.send(new DeleteObjectCommand({ Bucket: srcBucket, Key: srcKey }));
     }
 
-    return `Successfully resized ${srcBucket}/${srcKey}`;
+    return `${srcBucket}/${srcKey}`;
 };
 
-const resizeImage = async (size, srcBucket, srcKey, dstBucket, dstKey) => {
-    const getObjectResponse = await s3Client.send(new GetObjectCommand({ Bucket: srcBucket, Key: srcKey }));
-    
-    // Convert stream to buffer for sharp
-    const chunks = [];
-    for await (const chunk of getObjectResponse.Body) {
-        chunks.push(chunk);
+const processEvent = async (event, deps) => {
+    const config = readConfig(deps.env || process.env);
+    const results = [];
+    for (const record of event.Records) {
+        results.push(await processRecord(record, { s3Client: deps.s3Client, config }));
     }
-    const imageBuffer = Buffer.concat(chunks);
-    
-    const resizedImage = await sharp(imageBuffer).autoOrient().resize(size).toBuffer();
+    return `Successfully resized ${results.join(', ')}`;
+};
 
-    let uploadParams = {
-        Bucket: dstBucket,
-        Key: `${dstKey}_${size}`,
-        Body: resizedImage,
-        ContentType: getObjectResponse.ContentType
-    };
+exports.handler = (event) => processEvent(event, { s3Client, env: process.env });
 
-    if (process.env.ACL) {
-        uploadParams.ACL = process.env.ACL;
-    }
-
-    await s3Client.send(new PutObjectCommand(uploadParams));
-}
+// Exported for tests
+exports.processEvent = processEvent;
+exports.readConfig = readConfig;
+exports.decodeKey = decodeKey;
